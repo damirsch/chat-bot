@@ -83,11 +83,33 @@ export class AnthropicService {
     const maxTokens =
       params.maxOutputTokens ?? (useThinking ? REASONING_BUDGETS[reasoning] : 2048);
 
+    // Prompt caching: cache the stable system prefix (persona + summary), and
+    // set a rolling cache breakpoint on the last message so the whole growing
+    // history prefix is cached and reused on the next turn (5-min ephemeral TTL,
+    // ~90% cheaper reads). Only pays off within an active conversation.
+    const mappedMessages: Anthropic.MessageParam[] = messages.map((m, i) => {
+      if (i === messages.length - 1) {
+        return {
+          role: m.role,
+          content: [
+            {
+              type: 'text',
+              text: m.content,
+              cache_control: { type: 'ephemeral' },
+            },
+          ],
+        };
+      }
+      return { role: m.role, content: m.content };
+    });
+
     const request: Anthropic.MessageCreateParamsNonStreaming = {
       model,
       max_tokens: maxTokens,
-      system,
-      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      system: [
+        { type: 'text', text: system, cache_control: { type: 'ephemeral' } },
+      ],
+      messages: mappedMessages,
     };
 
     if (useThinking) {
@@ -147,6 +169,12 @@ export class AnthropicService {
       });
       inputTokens += response.usage.input_tokens;
       outputTokens += response.usage.output_tokens;
+      this.logger.debug(
+        `usage in=${response.usage.input_tokens} ` +
+          `cacheRead=${response.usage.cache_read_input_tokens ?? 0} ` +
+          `cacheWrite=${response.usage.cache_creation_input_tokens ?? 0} ` +
+          `out=${response.usage.output_tokens}`,
+      );
 
       if (response.stop_reason === 'tool_use' && params.onToolUse) {
         const toolUses = response.content.filter(
