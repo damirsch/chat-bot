@@ -144,6 +144,16 @@ export class ChatService {
       `If asked which model you are, answer with this exact model and version. ` +
       `The user can switch your model at any time with the /model command.`;
 
+    if (this.config.get<string>('WEB_SEARCH_ENABLED') !== 'false') {
+      system +=
+        `\n\n# Web search\n` +
+        `You have a web_search tool. Use it whenever a question needs up-to-date, ` +
+        `real-time, or niche factual information you are not confident about ` +
+        `(current events, prices, versions, dates, recent news). ` +
+        `Do not claim you lack internet access — search instead. ` +
+        `Cite sources briefly when it helps.`;
+    }
+
     if (summary?.content) {
       system += `\n\nКонтекст предыдущей беседы (сводка):\n${summary.content}`;
     }

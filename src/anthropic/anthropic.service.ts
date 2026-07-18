@@ -50,6 +50,8 @@ export const ALLOWED_REACTIONS = [
 export class AnthropicService {
   private readonly logger = new Logger(AnthropicService.name);
   private readonly client: Anthropic;
+  private readonly webSearchEnabled: boolean;
+  private readonly webSearchMaxUses: number;
 
   constructor(private readonly config: ConfigService) {
     const apiKey = this.config.get<string>('ANTHROPIC_API_KEY');
@@ -57,6 +59,11 @@ export class AnthropicService {
       throw new Error('ANTHROPIC_API_KEY is not set');
     }
     this.client = new Anthropic({ apiKey });
+    this.webSearchEnabled =
+      this.config.get<string>('WEB_SEARCH_ENABLED') !== 'false';
+    this.webSearchMaxUses = Number(
+      this.config.get<string>('WEB_SEARCH_MAX_USES') ?? '5',
+    );
   }
 
   private buildRequest(params: {
@@ -87,6 +94,16 @@ export class AnthropicService {
 
     if (thinkingBudget > 0) {
       request.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+    }
+
+    if (this.webSearchEnabled) {
+      request.tools = [
+        {
+          type: 'web_search_20250305',
+          name: 'web_search',
+          max_uses: this.webSearchMaxUses,
+        },
+      ];
     }
 
     return request;
