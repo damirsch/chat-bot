@@ -6,6 +6,7 @@ Telegram AI chat bot powered by Anthropic Claude, built with NestJS.
 - **Smart group mode**: besides `@mention`/reply, a cheap Haiku "gate" decides on its own whether to chime in, react with an emoji, or stay silent — with a debounce buffer for message bursts and a cooldown to avoid spam. It's reply-aware, so it won't butt into exchanges aimed at other people.
 - **Targeted replies & reactions**: in groups the bot answers as a reply to the relevant message and can react with an emoji instead of writing.
 - **Switch models** on the fly: Opus 4.8 / Sonnet 5 / Haiku 4.5, with adjustable reasoning level.
+- **Web search**: the model can look things up online (Anthropic's server-side `web_search` tool) for fresh facts — current events, prices, versions, dates.
 - **Custom personality** per chat via `/persona` (falls back to `SYSTEM_PROMPT` env, then a built-in default).
 - **Persistent history** in PostgreSQL with automatic **rolling summarization** to keep context small.
 
@@ -70,6 +71,8 @@ Telegram AI chat bot powered by Anthropic Claude, built with NestJS.
 | `GROUP_GATE_ENABLED` | `true` | Smart group mode (bot decides when to chime in) |
 | `GATE_DEBOUNCE_MS` | `5000` | Debounce window for group message bursts |
 | `GATE_COOLDOWN_MS` | `60000` | Min gap between self-initiated group replies |
+| `WEB_SEARCH_ENABLED` | `true` | Let the model search the web (~$10 / 1000 searches) |
+| `WEB_SEARCH_MAX_USES` | `5` | Max searches the model may run per reply |
 
 ## Roadmap (next)
 
