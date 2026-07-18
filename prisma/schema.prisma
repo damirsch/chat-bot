@@ -1,0 +1,55 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChatKind {
+  PRIVATE
+  GROUP
+}
+
+enum MessageRole {
+  USER
+  ASSISTANT
+}
+
+model Chat {
+  id           String   @id @default(cuid())
+  telegramId   BigInt   @unique
+  kind         ChatKind
+  title        String?
+  model        String
+  reasoning    String   @default("off")
+  systemPrompt String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  messages Message[]
+  summary  Summary?
+}
+
+model Message {
+  id            String      @id @default(cuid())
+  chat          Chat        @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId        String
+  role          MessageRole
+  content       String      @db.Text
+  telegramMsgId Int?
+  senderName    String?
+  tokens        Int         @default(0)
+  createdAt     DateTime    @default(now())
+
+  @@index([chatId, createdAt])
+}
+
+model Summary {
+  id        String   @id @default(cuid())
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  chatId    String   @unique
+  content   String   @db.Text
+  updatedAt DateTime @updatedAt
+}

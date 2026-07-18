@@ -1,0 +1,37 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: chatbot
+      POSTGRES_PASSWORD: chatbot
+      POSTGRES_DB: chatbot
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chatbot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  bot:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      DATABASE_URL: postgresql://chatbot:chatbot@postgres:5432/chatbot?schema=public
+      DEFAULT_MODEL: ${DEFAULT_MODEL:-claude-sonnet-5}
+      HISTORY_WINDOW: ${HISTORY_WINDOW:-20}
+      GROUP_GATE_ENABLED: ${GROUP_GATE_ENABLED:-true}
+      GATE_DEBOUNCE_MS: ${GATE_DEBOUNCE_MS:-5000}
+      GATE_COOLDOWN_MS: ${GATE_COOLDOWN_MS:-60000}
+      NODE_ENV: production
+
+volumes:
+  pgdata:
