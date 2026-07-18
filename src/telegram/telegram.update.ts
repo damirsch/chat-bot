@@ -290,7 +290,9 @@ export class TelegramUpdate implements OnApplicationBootstrap {
 
     if (isPrivate) {
       // In private chats always reply to the user's message.
-      await this.responder.respond(telegramChatId);
+      await this.responder.respond(telegramChatId, {
+        reactToMessageId: message.message_id,
+      });
       return;
     }
 
@@ -298,6 +300,7 @@ export class TelegramUpdate implements OnApplicationBootstrap {
       // Direct @mention or reply — answer immediately.
       await this.responder.respond(telegramChatId, {
         replyToMessageId: message.message_id,
+        reactToMessageId: message.message_id,
       });
       return;
     }

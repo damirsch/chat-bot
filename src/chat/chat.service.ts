@@ -144,6 +144,13 @@ export class ChatService {
       `If asked which model you are, answer with this exact model and version. ` +
       `The user can switch your model at any time with the /model command.`;
 
+    system +=
+      `\n\n# Reactions\n` +
+      `You can set an emoji reaction on the user's message via the set_reaction tool ` +
+      `(when it is offered to you). Use it for light acknowledgement or when the user ` +
+      `asks you to react/like a message — you may also send a short text reply. ` +
+      `Never claim you are unable to react; if the tool isn't available, just reply in text.`;
+
     if (this.config.get<string>('WEB_SEARCH_ENABLED') !== 'false') {
       system +=
         `\n\n# Web search\n` +

@@ -3,7 +3,10 @@ import { InjectBot } from 'nestjs-telegraf';
 import { Telegraf, Context } from 'telegraf';
 import { MessageRole } from '@prisma/client';
 import { ChatService } from '../chat/chat.service';
-import { AnthropicService } from '../anthropic/anthropic.service';
+import {
+  AnthropicService,
+  ALLOWED_REACTIONS,
+} from '../anthropic/anthropic.service';
 import { ReasoningLevel } from '../config/models.config';
 import { markdownToTelegramHtml } from './markdown.util';
 
@@ -26,7 +29,7 @@ export class ResponderService {
    */
   async respond(
     telegramChatId: number,
-    opts: { replyToMessageId?: number } = {},
+    opts: { replyToMessageId?: number; reactToMessageId?: number } = {},
   ): Promise<void> {
     const chat = await this.chat.findByTelegramId(telegramChatId);
     if (!chat) return;
@@ -39,6 +42,7 @@ export class ResponderService {
         reasoning: chat.reasoning as ReasoningLevel,
         system,
         messages,
+        ...this.reactionTool(telegramChatId, opts.reactToMessageId),
       });
 
       await this.chat.addMessage({
@@ -65,6 +69,62 @@ export class ResponderService {
     } finally {
       stopTyping();
     }
+  }
+
+  /**
+   * Build the `set_reaction` client tool + executor for a given target message.
+   * Returns an empty object when there's no message to react to, so the tool is
+   * simply not offered to the model in that case.
+   */
+  private reactionTool(
+    telegramChatId: number,
+    reactToMessageId?: number,
+  ): {
+    tools?: {
+      name: string;
+      description: string;
+      input_schema: {
+        type: 'object';
+        properties: Record<string, unknown>;
+        required: string[];
+      };
+    }[];
+    onToolUse?: (name: string, input: unknown) => Promise<string>;
+  } {
+    if (!reactToMessageId) return {};
+
+    return {
+      tools: [
+        {
+          name: 'set_reaction',
+          description:
+            "Set a single emoji reaction on the user's latest message. " +
+            'Use it for lightweight acknowledgement (agreement, appreciation, humour) ' +
+            'or when the user explicitly asks you to react/like a message. ' +
+            'You may still also send a short text reply afterwards. ' +
+            `Allowed emojis only: ${ALLOWED_REACTIONS.join(' ')}.`,
+          input_schema: {
+            type: 'object',
+            properties: {
+              emoji: {
+                type: 'string',
+                description: 'One emoji from the allowed list.',
+              },
+            },
+            required: ['emoji'],
+          },
+        },
+      ],
+      onToolUse: async (name, input) => {
+        if (name !== 'set_reaction') return `Unknown tool: ${name}`;
+        const emoji = (input as { emoji?: string })?.emoji?.trim() ?? '';
+        if (!ALLOWED_REACTIONS.includes(emoji)) {
+          return `Emoji "${emoji}" is not allowed. Pick one of: ${ALLOWED_REACTIONS.join(' ')}`;
+        }
+        await this.react(telegramChatId, reactToMessageId, emoji);
+        return `Reaction ${emoji} was set on the message.`;
+      },
+    };
   }
 
   /** Send "typing…" now and keep refreshing it every 4s until stopped. */

@@ -117,22 +117,69 @@ export class AnthropicService {
       .trim();
   }
 
-  /** One-shot completion (no streaming). */
+  /**
+   * One-shot completion (no streaming). Server-side tools (web_search) are
+   * resolved by Anthropic transparently. When `tools`/`onToolUse` are given,
+   * client-side tool calls (e.g. set_reaction) are executed locally in a short
+   * loop until the model produces its final text answer.
+   */
   async complete(params: {
     model: string;
     reasoning: ReasoningLevel;
     system: string;
     messages: ChatMessage[];
     maxOutputTokens?: number;
+    tools?: Anthropic.MessageCreateParamsNonStreaming['tools'];
+    onToolUse?: (name: string, input: unknown) => Promise<string>;
   }): Promise<CompletionResult> {
-    const response = await this.client.messages.create(
-      this.buildRequest(params),
-    );
-    return {
-      text: this.extractText(response.content) || '…',
-      inputTokens: response.usage.input_tokens,
-      outputTokens: response.usage.output_tokens,
-    };
+    const request = this.buildRequest(params);
+    if (params.tools?.length) {
+      request.tools = [...(request.tools ?? []), ...params.tools];
+    }
+
+    const convo: Anthropic.MessageParam[] = [...request.messages];
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for (let step = 0; step < 5; step++) {
+      const response = await this.client.messages.create({
+        ...request,
+        messages: convo,
+      });
+      inputTokens += response.usage.input_tokens;
+      outputTokens += response.usage.output_tokens;
+
+      if (response.stop_reason === 'tool_use' && params.onToolUse) {
+        const toolUses = response.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        convo.push({ role: 'assistant', content: response.content });
+        const results: Anthropic.ToolResultBlockParam[] = [];
+        for (const tu of toolUses) {
+          let content: string;
+          try {
+            content = await params.onToolUse(tu.name, tu.input);
+          } catch (err) {
+            content = `Error: ${String(err)}`;
+          }
+          results.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content,
+          });
+        }
+        convo.push({ role: 'user', content: results });
+        continue;
+      }
+
+      return {
+        text: this.extractText(response.content) || '…',
+        inputTokens,
+        outputTokens,
+      };
+    }
+
+    return { text: '…', inputTokens, outputTokens };
   }
 
   /** Cheap deterministic call used for utility tasks like summarization. */
