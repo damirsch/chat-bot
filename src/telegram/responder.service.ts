@@ -5,6 +5,7 @@ import { MessageRole } from '@prisma/client';
 import { ChatService } from '../chat/chat.service';
 import { AnthropicService } from '../anthropic/anthropic.service';
 import { ReasoningLevel } from '../config/models.config';
+import { markdownToTelegramHtml } from './markdown.util';
 
 const TELEGRAM_MSG_LIMIT = 4000;
 
@@ -78,9 +79,10 @@ export class ResponderService {
   }
 
   /**
-   * Send the reply, splitting on Telegram's length limit. The first chunk is
-   * sent as a reply to `replyToMessageId` when provided; Markdown is attempted
-   * with a plain-text fallback if parsing fails.
+   * Send the reply, splitting on Telegram's length limit. Each chunk of raw
+   * Markdown is converted to Telegram-flavoured HTML and sent with
+   * `parse_mode: 'HTML'`; on a parse error we fall back to the plain raw text.
+   * The first chunk is sent as a reply to `replyToMessageId` when provided.
    */
   private async sendReply(
     telegramChatId: number,
@@ -94,10 +96,11 @@ export class ResponderService {
         extra.reply_parameters = { message_id: replyToMessageId };
       }
       try {
-        await this.bot.telegram.sendMessage(telegramChatId, chunk, {
-          ...extra,
-          parse_mode: 'Markdown',
-        });
+        await this.bot.telegram.sendMessage(
+          telegramChatId,
+          markdownToTelegramHtml(chunk),
+          { ...extra, parse_mode: 'HTML' },
+        );
       } catch {
         await this.bot.telegram
           .sendMessage(telegramChatId, chunk, extra)
