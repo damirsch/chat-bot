@@ -50,7 +50,11 @@ export class ResponderService {
       await this.sendReply(telegramChatId, result.text, opts.replyToMessageId);
       await this.chat.maybeSummarize(chat);
     } catch (err) {
-      this.logger.error('Failed to generate reply', err as Error);
+      const e = err as { status?: number; message?: string };
+      this.logger.error(
+        `Failed to generate reply (model=${chat.model} reasoning=${chat.reasoning} status=${e.status ?? '?'}): ${e.message ?? String(err)}`,
+        (err as Error)?.stack,
+      );
       await this.bot.telegram
         .sendMessage(
           telegramChatId,
