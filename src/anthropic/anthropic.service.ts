@@ -76,14 +76,12 @@ export class AnthropicService {
     const { model, reasoning, system, messages } = params;
     const modelDef = getModel(model);
 
-    const thinkingBudget =
-      modelDef?.supportsReasoning && reasoning !== 'off'
-        ? REASONING_BUDGETS[reasoning]
-        : 0;
+    const useThinking = !!modelDef?.supportsReasoning && reasoning !== 'off';
 
-    const outputAllowance = params.maxOutputTokens ?? 2048;
+    // Adaptive thinking lets the model size its own reasoning; effort steers it.
+    // Give a generous output ceiling so thinking + answer both fit.
     const maxTokens =
-      thinkingBudget > 0 ? thinkingBudget + outputAllowance : outputAllowance;
+      params.maxOutputTokens ?? (useThinking ? REASONING_BUDGETS[reasoning] : 2048);
 
     const request: Anthropic.MessageCreateParamsNonStreaming = {
       model,
@@ -92,8 +90,9 @@ export class AnthropicService {
       messages: messages.map((m) => ({ role: m.role, content: m.content })),
     };
 
-    if (thinkingBudget > 0) {
-      request.thinking = { type: 'enabled', budget_tokens: thinkingBudget };
+    if (useThinking) {
+      request.thinking = { type: 'adaptive' };
+      request.output_config = { effort: reasoning };
     }
 
     if (this.webSearchEnabled) {
