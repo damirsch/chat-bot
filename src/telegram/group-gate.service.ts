@@ -77,7 +77,9 @@ export class GroupGateService {
           return;
         }
         this.lastResponseAt.set(telegramChatId, Date.now());
-        await this.responder.respond(telegramChatId);
+        await this.responder.respond(telegramChatId, {
+          replyToMessageId: lastMessageId,
+        });
       } else if (decision.action === 'react' && decision.emoji) {
         await this.responder.react(
           telegramChatId,

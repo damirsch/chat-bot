@@ -275,11 +275,13 @@ export class TelegramUpdate implements OnApplicationBootstrap {
       message.from?.first_name ?? message.from?.username ?? undefined;
 
     const cleaned = this.stripMention(text, ctx.botInfo?.username);
+    const replyNote = this.describeReply(ctx);
+    const content = replyNote ? `${replyNote} ${cleaned}` : cleaned;
 
     await this.chat.addMessage({
       chatId: chat.id,
       role: MessageRole.USER,
-      content: cleaned,
+      content,
       telegramMsgId: message.message_id,
       senderName,
     });
@@ -337,6 +339,29 @@ export class TelegramUpdate implements OnApplicationBootstrap {
   private stripMention(text: string, username?: string): string {
     if (!username) return text.trim();
     return text.replace(new RegExp(`@${username}`, 'gi'), '').trim() || text;
+  }
+
+  /**
+   * Build a short annotation describing what a message replies to, so the model
+   * (and the group gate) understand conversation threading and don't butt into
+   * exchanges aimed at other people. Returns '' when it's not a reply.
+   */
+  private describeReply(ctx: Context): string {
+    const message = ctx.message;
+    if (!message || !('reply_to_message' in message)) return '';
+    const replyTo = message.reply_to_message;
+    if (!replyTo) return '';
+
+    if (replyTo.from?.id === ctx.botInfo?.id) return '(в ответ на моё сообщение)';
+
+    const who =
+      replyTo.from?.first_name ?? replyTo.from?.username ?? 'другому участнику';
+    let quoted = '';
+    if ('text' in replyTo && replyTo.text) {
+      const snippet = replyTo.text.slice(0, 80);
+      quoted = `: «${snippet}${replyTo.text.length > 80 ? '…' : ''}»`;
+    }
+    return `(в ответ ${who}${quoted})`;
   }
 
   private chatKind(ctx: Context): ChatKind {

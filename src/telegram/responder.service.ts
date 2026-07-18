@@ -7,7 +7,6 @@ import { AnthropicService } from '../anthropic/anthropic.service';
 import { ReasoningLevel } from '../config/models.config';
 
 const TELEGRAM_MSG_LIMIT = 4000;
-const EDIT_THROTTLE_MS = 1100;
 
 @Injectable()
 export class ResponderService {
@@ -20,8 +19,9 @@ export class ResponderService {
   ) {}
 
   /**
-   * Generate a streamed Claude reply and edit it into a single Telegram
-   * message as tokens arrive. The chat must already exist in the DB.
+   * Generate a Claude reply and send it as a single message (or a few, if it
+   * exceeds Telegram's length limit). Optionally sent as a reply to a specific
+   * message. The chat must already exist in the DB.
    */
   async respond(
     telegramChatId: number,
@@ -30,48 +30,15 @@ export class ResponderService {
     const chat = await this.chat.findByTelegramId(telegramChatId);
     if (!chat) return;
 
-    await this.bot.telegram
-      .sendChatAction(telegramChatId, 'typing')
-      .catch(() => undefined);
-
-    const placeholder = await this.bot.telegram.sendMessage(
-      telegramChatId,
-      '✍️…',
-      opts.replyToMessageId
-        ? { reply_parameters: { message_id: opts.replyToMessageId } }
-        : {},
-    );
-    const messageId = placeholder.message_id;
-
-    let lastEditAt = 0;
-    let lastSent = '✍️…';
-
-    const flush = (text: string, force = false): void => {
-      const now = Date.now();
-      const trimmed = text.slice(0, TELEGRAM_MSG_LIMIT);
-      if (!trimmed) return;
-      if (!force && now - lastEditAt < EDIT_THROTTLE_MS) return;
-      if (trimmed === lastSent) return;
-      lastEditAt = now;
-      lastSent = trimmed;
-      void this.bot.telegram
-        .editMessageText(telegramChatId, messageId, undefined, trimmed)
-        .catch(() => undefined);
-    };
-
+    const stopTyping = this.startTyping(telegramChatId);
     try {
       const { system, messages } = await this.chat.buildContext(chat);
-      const result = await this.anthropic.streamComplete(
-        {
-          model: chat.model,
-          reasoning: chat.reasoning as ReasoningLevel,
-          system,
-          messages,
-        },
-        (accumulated) => flush(accumulated),
-      );
-
-      await this.finalize(telegramChatId, messageId, result.text);
+      const result = await this.anthropic.complete({
+        model: chat.model,
+        reasoning: chat.reasoning as ReasoningLevel,
+        system,
+        messages,
+      });
 
       await this.chat.addMessage({
         chatId: chat.id,
@@ -79,50 +46,59 @@ export class ResponderService {
         content: result.text,
         tokens: result.outputTokens,
       });
+
+      await this.sendReply(telegramChatId, result.text, opts.replyToMessageId);
       await this.chat.maybeSummarize(chat);
     } catch (err) {
-      this.logger.error('Failed to stream reply', err as Error);
+      this.logger.error('Failed to generate reply', err as Error);
       await this.bot.telegram
-        .editMessageText(
+        .sendMessage(
           telegramChatId,
-          messageId,
-          undefined,
           '⚠️ Не удалось получить ответ. Попробуй ещё раз.',
         )
         .catch(() => undefined);
+    } finally {
+      stopTyping();
     }
   }
 
-  /**
-   * Final render: fit the first chunk into the streamed message (trying
-   * Markdown, falling back to plain text) and send any overflow as new
-   * messages.
-   */
-  private async finalize(
-    chatId: number,
-    messageId: number,
-    text: string,
-  ): Promise<void> {
-    const head = text.slice(0, TELEGRAM_MSG_LIMIT);
-    const rest = text.slice(TELEGRAM_MSG_LIMIT);
-
-    try {
-      await this.bot.telegram.editMessageText(
-        chatId,
-        messageId,
-        undefined,
-        head,
-        { parse_mode: 'Markdown' },
-      );
-    } catch {
-      await this.bot.telegram
-        .editMessageText(chatId, messageId, undefined, head)
+  /** Send "typing…" now and keep refreshing it every 4s until stopped. */
+  private startTyping(telegramChatId: number): () => void {
+    const send = () =>
+      this.bot.telegram
+        .sendChatAction(telegramChatId, 'typing')
         .catch(() => undefined);
-    }
+    void send();
+    const interval = setInterval(send, 4000);
+    return () => clearInterval(interval);
+  }
 
-    for (let i = 0; i < rest.length; i += TELEGRAM_MSG_LIMIT) {
-      const chunk = rest.slice(i, i + TELEGRAM_MSG_LIMIT);
-      await this.bot.telegram.sendMessage(chatId, chunk).catch(() => undefined);
+  /**
+   * Send the reply, splitting on Telegram's length limit. The first chunk is
+   * sent as a reply to `replyToMessageId` when provided; Markdown is attempted
+   * with a plain-text fallback if parsing fails.
+   */
+  private async sendReply(
+    telegramChatId: number,
+    text: string,
+    replyToMessageId?: number,
+  ): Promise<void> {
+    for (let i = 0; i < text.length; i += TELEGRAM_MSG_LIMIT) {
+      const chunk = text.slice(i, i + TELEGRAM_MSG_LIMIT);
+      const extra: Record<string, unknown> = {};
+      if (i === 0 && replyToMessageId) {
+        extra.reply_parameters = { message_id: replyToMessageId };
+      }
+      try {
+        await this.bot.telegram.sendMessage(telegramChatId, chunk, {
+          ...extra,
+          parse_mode: 'Markdown',
+        });
+      } catch {
+        await this.bot.telegram
+          .sendMessage(telegramChatId, chunk, extra)
+          .catch(() => undefined);
+      }
     }
   }
 

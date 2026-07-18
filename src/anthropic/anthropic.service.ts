@@ -118,36 +118,6 @@ export class AnthropicService {
     };
   }
 
-  /**
-   * Streaming completion. `onText` receives the accumulated text so far and is
-   * called on every delta; the caller decides how often to flush it to Telegram.
-   */
-  async streamComplete(
-    params: {
-      model: string;
-      reasoning: ReasoningLevel;
-      system: string;
-      messages: ChatMessage[];
-      maxOutputTokens?: number;
-    },
-    onText: (accumulated: string) => void,
-  ): Promise<CompletionResult> {
-    const stream = this.client.messages.stream(this.buildRequest(params));
-
-    let acc = '';
-    stream.on('text', (delta: string) => {
-      acc += delta;
-      onText(acc);
-    });
-
-    const finalMessage = await stream.finalMessage();
-    return {
-      text: this.extractText(finalMessage.content) || acc.trim() || '…',
-      inputTokens: finalMessage.usage.input_tokens,
-      outputTokens: finalMessage.usage.output_tokens,
-    };
-  }
-
   /** Cheap deterministic call used for utility tasks like summarization. */
   async utility(params: {
     model: string;
@@ -176,7 +146,8 @@ export class AnthropicService {
     const system = [
       'You are an AI participant in a Telegram group chat, deciding whether to react to the latest messages.',
       'Default to staying silent — a good participant does not interrupt every message.',
-      'Choose "respond" only when it clearly adds value: a direct question you can answer, a request for help, a factual gap you can fill, or a moment where a reply is genuinely wanted.',
+      'Messages may be annotated in parentheses with who they reply to, e.g. "(в ответ Bob: «...»)". If the latest message is clearly directed at another specific participant (a reply to them, or addressing them by name) and does not need you, stay SILENT — do not butt into a conversation between other people.',
+      'Choose "respond" only when it clearly adds value: a direct question you can answer, a request for help addressed to the group or to you, or a factual gap you can genuinely fill.',
       'Choose "react" for light acknowledgement (agreement, appreciation, humor) where a full message is unnecessary.',
       'Otherwise choose "silent".',
       'Reply with ONLY a compact JSON object, no prose: {"action":"respond"|"react"|"silent","emoji":"<single emoji or empty>"}.',

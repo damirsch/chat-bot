@@ -3,8 +3,8 @@
 Telegram AI chat bot powered by Anthropic Claude, built with NestJS.
 
 - Works in **private chats** (replies to every message) and **groups**.
-- **Smart group mode**: besides `@mention`/reply, a cheap Haiku "gate" decides on its own whether to chime in, react with an emoji, or stay silent — with a debounce buffer for message bursts and a cooldown to avoid spam.
-- **Streaming replies**: the answer is edited into a single message as tokens arrive (`editMessageText`).
+- **Smart group mode**: besides `@mention`/reply, a cheap Haiku "gate" decides on its own whether to chime in, react with an emoji, or stay silent — with a debounce buffer for message bursts and a cooldown to avoid spam. It's reply-aware, so it won't butt into exchanges aimed at other people.
+- **Targeted replies & reactions**: in groups the bot answers as a reply to the relevant message and can react with an emoji instead of writing.
 - **Switch models** on the fly: Opus 4.8 / Sonnet 5 / Haiku 4.5, with adjustable reasoning level.
 - **Custom personality** per chat via `/persona` (falls back to `SYSTEM_PROMPT` env, then a built-in default).
 - **Persistent history** in PostgreSQL with automatic **rolling summarization** to keep context small.
