@@ -34,6 +34,7 @@ services:
       GATE_COOLDOWN_MS: ${GATE_COOLDOWN_MS:-60000}
       WEB_SEARCH_ENABLED: ${WEB_SEARCH_ENABLED:-true}
       WEB_SEARCH_MAX_USES: ${WEB_SEARCH_MAX_USES:-5}
+      STREAM_ENABLED: ${STREAM_ENABLED:-true}
       NODE_ENV: production
 
 volumes:

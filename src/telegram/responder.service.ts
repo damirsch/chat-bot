@@ -1,7 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectBot } from 'nestjs-telegraf';
 import { Telegraf, Context } from 'telegraf';
-import { MessageRole } from '@prisma/client';
+import { Chat, MessageRole } from '@prisma/client';
 import { ChatService } from '../chat/chat.service';
 import {
   AnthropicService,
@@ -11,28 +12,45 @@ import { ReasoningLevel } from '../config/models.config';
 import { markdownToTelegramHtml } from './markdown.util';
 
 const TELEGRAM_MSG_LIMIT = 4000;
+// Min gap between live-draft updates. Bot API caps drafts at 20 calls / 5s.
+const DRAFT_THROTTLE_MS = 700;
 
 @Injectable()
 export class ResponderService {
   private readonly logger = new Logger(ResponderService.name);
+  private readonly streamEnabled: boolean;
 
   constructor(
     @InjectBot() private readonly bot: Telegraf<Context>,
     private readonly chat: ChatService,
     private readonly anthropic: AnthropicService,
-  ) {}
+    private readonly config: ConfigService,
+  ) {
+    this.streamEnabled =
+      this.config.get<string>('STREAM_ENABLED') !== 'false';
+  }
 
   /**
    * Generate a Claude reply and send it as a single message (or a few, if it
    * exceeds Telegram's length limit). Optionally sent as a reply to a specific
-   * message. The chat must already exist in the DB.
+   * message. When `stream` is set (private chats only) the reply is streamed
+   * live via Telegram's ephemeral message drafts. The chat must already exist.
    */
   async respond(
     telegramChatId: number,
-    opts: { replyToMessageId?: number; reactToMessageId?: number } = {},
+    opts: {
+      replyToMessageId?: number;
+      reactToMessageId?: number;
+      stream?: boolean;
+    } = {},
   ): Promise<void> {
     const chat = await this.chat.findByTelegramId(telegramChatId);
     if (!chat) return;
+
+    if (opts.stream && this.streamEnabled) {
+      await this.respondStreaming(chat, telegramChatId, opts);
+      return;
+    }
 
     const stopTyping = this.startTyping(telegramChatId);
     try {
@@ -55,11 +73,7 @@ export class ResponderService {
       await this.sendReply(telegramChatId, result.text, opts.replyToMessageId);
       await this.chat.maybeSummarize(chat);
     } catch (err) {
-      const e = err as { status?: number; message?: string };
-      this.logger.error(
-        `Failed to generate reply (model=${chat.model} reasoning=${chat.reasoning} status=${e.status ?? '?'}): ${e.message ?? String(err)}`,
-        (err as Error)?.stack,
-      );
+      this.reportFailure(err, chat);
       await this.bot.telegram
         .sendMessage(
           telegramChatId,
@@ -69,6 +83,106 @@ export class ResponderService {
     } finally {
       stopTyping();
     }
+  }
+
+  /**
+   * Stream the reply into an ephemeral Telegram draft (private chats only),
+   * then persist it as a real message. Falls back to a normal message if
+   * anything goes wrong mid-stream.
+   */
+  private async respondStreaming(
+    chat: Chat,
+    telegramChatId: number,
+    opts: { reactToMessageId?: number },
+  ): Promise<void> {
+    const draftId = Math.floor(Math.random() * 2_000_000_000) + 1;
+    let buffer = '';
+    let sentText = '';
+    let lastSendAt = 0;
+    let sending = false;
+
+    const pushDraft = () => {
+      if (sending || buffer === sentText) return;
+      if (Date.now() - lastSendAt < DRAFT_THROTTLE_MS) return;
+      sending = true;
+      const snapshot = buffer.slice(0, 4096);
+      lastSendAt = Date.now();
+      void this.sendDraft(telegramChatId, draftId, snapshot).finally(() => {
+        sentText = snapshot;
+        sending = false;
+      });
+    };
+
+    // Empty draft shows a native "Thinking…" placeholder while the model works.
+    await this.sendDraft(telegramChatId, draftId, '');
+
+    try {
+      const { system, messages } = await this.chat.buildContext(chat);
+      const result = await this.anthropic.completeStream({
+        model: chat.model,
+        reasoning: chat.reasoning as ReasoningLevel,
+        system,
+        messages,
+        ...this.reactionTool(telegramChatId, opts.reactToMessageId),
+        onTextDelta: (delta) => {
+          buffer += delta;
+          pushDraft();
+        },
+      });
+
+      const finalText = result.text.trim();
+      if (finalText) {
+        await this.chat.addMessage({
+          chatId: chat.id,
+          role: MessageRole.ASSISTANT,
+          content: finalText,
+          tokens: result.outputTokens,
+        });
+        await this.sendReply(telegramChatId, finalText);
+      }
+      await this.chat.maybeSummarize(chat);
+    } catch (err) {
+      this.reportFailure(err, chat);
+      // If we already streamed something, deliver it; else show the error.
+      if (buffer.trim()) {
+        await this.sendReply(telegramChatId, buffer.trim()).catch(
+          () => undefined,
+        );
+      } else {
+        await this.bot.telegram
+          .sendMessage(
+            telegramChatId,
+            '⚠️ Не удалось получить ответ. Попробуй ещё раз.',
+          )
+          .catch(() => undefined);
+      }
+    }
+  }
+
+  /** Push a live draft update (Bot API `sendMessageDraft`; private chats only). */
+  private async sendDraft(
+    telegramChatId: number,
+    draftId: number,
+    text: string,
+  ): Promise<void> {
+    await (
+      this.bot.telegram.callApi as unknown as (
+        method: string,
+        payload: Record<string, unknown>,
+      ) => Promise<unknown>
+    )('sendMessageDraft', {
+      chat_id: telegramChatId,
+      draft_id: draftId,
+      text,
+    }).catch(() => undefined);
+  }
+
+  private reportFailure(err: unknown, chat: Chat): void {
+    const e = err as { status?: number; message?: string };
+    this.logger.error(
+      `Failed to generate reply (model=${chat.model} reasoning=${chat.reasoning} status=${e.status ?? '?'}): ${e.message ?? String(err)}`,
+      (err as Error)?.stack,
+    );
   }
 
   /**

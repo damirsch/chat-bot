@@ -289,9 +289,10 @@ export class TelegramUpdate implements OnApplicationBootstrap {
     const telegramChatId = Number(ctx.chat!.id);
 
     if (isPrivate) {
-      // In private chats always reply to the user's message.
+      // In private chats always reply, streaming live via message drafts.
       await this.responder.respond(telegramChatId, {
         reactToMessageId: message.message_id,
+        stream: true,
       });
       return;
     }

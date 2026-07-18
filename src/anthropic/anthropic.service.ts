@@ -209,6 +209,80 @@ export class AnthropicService {
     return { text: '…', inputTokens, outputTokens };
   }
 
+  /**
+   * Streaming variant of {@link complete}: forwards answer text deltas to
+   * `onTextDelta` as they are generated, while still running the client-side
+   * tool loop (set_reaction) and server-side tools (web_search). Returns the
+   * full accumulated answer text for persistence / final delivery.
+   */
+  async completeStream(params: {
+    model: string;
+    reasoning: ReasoningLevel;
+    system: string;
+    messages: ChatMessage[];
+    maxOutputTokens?: number;
+    tools?: Anthropic.MessageCreateParamsNonStreaming['tools'];
+    onToolUse?: (name: string, input: unknown) => Promise<string>;
+    onTextDelta: (delta: string) => void;
+  }): Promise<CompletionResult> {
+    const request = this.buildRequest(params);
+    if (params.tools?.length) {
+      request.tools = [...(request.tools ?? []), ...params.tools];
+    }
+
+    const convo: Anthropic.MessageParam[] = [...request.messages];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let fullText = '';
+
+    for (let step = 0; step < 5; step++) {
+      const stream = this.client.messages.stream({
+        ...request,
+        messages: convo,
+      });
+      stream.on('text', (delta) => {
+        fullText += delta;
+        params.onTextDelta(delta);
+      });
+      const response = await stream.finalMessage();
+      inputTokens += response.usage.input_tokens;
+      outputTokens += response.usage.output_tokens;
+      this.logger.debug(
+        `stream usage in=${response.usage.input_tokens} ` +
+          `cacheRead=${response.usage.cache_read_input_tokens ?? 0} ` +
+          `cacheWrite=${response.usage.cache_creation_input_tokens ?? 0} ` +
+          `out=${response.usage.output_tokens}`,
+      );
+
+      if (response.stop_reason === 'tool_use' && params.onToolUse) {
+        const toolUses = response.content.filter(
+          (b): b is Anthropic.ToolUseBlock => b.type === 'tool_use',
+        );
+        convo.push({ role: 'assistant', content: response.content });
+        const results: Anthropic.ToolResultBlockParam[] = [];
+        for (const tu of toolUses) {
+          let content: string;
+          try {
+            content = await params.onToolUse(tu.name, tu.input);
+          } catch (err) {
+            content = `Error: ${String(err)}`;
+          }
+          results.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content,
+          });
+        }
+        convo.push({ role: 'user', content: results });
+        continue;
+      }
+
+      return { text: fullText.trim(), inputTokens, outputTokens };
+    }
+
+    return { text: fullText.trim(), inputTokens, outputTokens };
+  }
+
   /** Cheap deterministic call used for utility tasks like summarization. */
   async utility(params: {
     model: string;
