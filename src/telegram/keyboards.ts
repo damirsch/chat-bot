@@ -12,15 +12,26 @@ const REASONING_LABELS: Record<ReasoningLevel, string> = {
   high: 'Высокий',
 };
 
+// Labels for the persistent reply keyboard (buttons under the input field).
+export const BTN = {
+  model: '🧠 Модель',
+  persona: '🎭 Персона',
+  summary: '📝 Сводка',
+  compact: '🗜 Сжать',
+  reset: '♻️ Сброс',
+  help: '❓ Помощь',
+} as const;
+
+export const BUTTON_LABELS: ReadonlySet<string> = new Set(Object.values(BTN));
+
 export function mainMenuKeyboard() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('🧠 Модель и reasoning', 'menu:model')],
-    [Markup.button.callback('🎭 Персона', 'menu:persona')],
-    [
-      Markup.button.callback('♻️ Сброс', 'menu:reset'),
-      Markup.button.callback('❓ Помощь', 'menu:help'),
-    ],
-  ]);
+  return Markup.keyboard([
+    [BTN.model, BTN.persona],
+    [BTN.summary, BTN.compact],
+    [BTN.reset, BTN.help],
+  ])
+    .resize()
+    .persistent();
 }
 
 export function modelKeyboard(currentModel: string) {

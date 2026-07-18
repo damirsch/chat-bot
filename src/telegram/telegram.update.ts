@@ -7,6 +7,7 @@ import {
   On,
   Ctx,
   Action,
+  Hears,
   InjectBot,
 } from 'nestjs-telegraf';
 import { Context, Telegraf } from 'telegraf';
@@ -23,6 +24,8 @@ import {
   modelKeyboard,
   reasoningKeyboard,
   REASONING_LABELS,
+  BTN,
+  BUTTON_LABELS,
 } from './keyboards';
 import { ResponderService } from './responder.service';
 import { GroupGateService } from './group-gate.service';
@@ -45,6 +48,8 @@ export class TelegramUpdate implements OnApplicationBootstrap {
         { command: 'start', description: 'Запустить бота / меню' },
         { command: 'model', description: 'Выбрать модель и reasoning' },
         { command: 'persona', description: 'Характер бота в этом чате' },
+        { command: 'summary', description: 'Показать сводку беседы' },
+        { command: 'compact', description: 'Сжать историю сейчас' },
         { command: 'reset', description: 'Очистить историю диалога' },
         { command: 'help', description: 'Помощь' },
       ]);
@@ -75,8 +80,11 @@ export class TelegramUpdate implements OnApplicationBootstrap {
         '',
         '/model — переключить модель (Opus 4.8 / Sonnet 5 / Haiku 4.5) и reasoning.',
         '/persona — задать свой системный промпт (характер) для этого чата; /persona reset — вернуть дефолт.',
+        '/summary — показать текущую сводку беседы.',
+        '/compact — принудительно сжать историю в сводку сейчас.',
         '/reset — начать диалог с чистого листа.',
         '',
+        'Кнопки под полем ввода дублируют эти действия.',
         'В группах вызывай меня через @упоминание или reply. Также я могу сам вставить реплику или поставить реакцию, когда это к месту.',
       ].join('\n'),
     );
@@ -97,37 +105,40 @@ export class TelegramUpdate implements OnApplicationBootstrap {
     );
   }
 
-  @Action('menu:model')
-  async onMenuModel(@Ctx() ctx: Context): Promise<void> {
-    await ctx.answerCbQuery();
+  @Hears(BTN.model)
+  async onBtnModel(@Ctx() ctx: Context): Promise<void> {
     await this.showModelPicker(ctx);
   }
 
-  @Action('menu:help')
-  async onMenuHelp(@Ctx() ctx: Context): Promise<void> {
-    await ctx.answerCbQuery();
+  @Hears(BTN.help)
+  async onBtnHelp(@Ctx() ctx: Context): Promise<void> {
     await this.onHelp(ctx);
   }
 
-  @Action('menu:persona')
-  async onMenuPersona(@Ctx() ctx: Context): Promise<void> {
-    await ctx.answerCbQuery();
+  @Hears(BTN.persona)
+  async onBtnPersona(@Ctx() ctx: Context): Promise<void> {
     await ctx.reply(
       'Чтобы задать характер бота в этом чате, отправь:\n`/persona <текст>`\n\nВернуть дефолт: `/persona reset`',
       { parse_mode: 'Markdown' },
     );
   }
 
-  @Action('menu:reset')
-  async onMenuReset(@Ctx() ctx: Context): Promise<void> {
+  @Hears(BTN.reset)
+  async onBtnReset(@Ctx() ctx: Context): Promise<void> {
     const chat = await this.resolveChat(ctx);
-    if (!chat) {
-      await ctx.answerCbQuery();
-      return;
-    }
+    if (!chat) return;
     await this.chat.reset(chat.id);
-    await ctx.answerCbQuery('История очищена');
     await ctx.reply('История очищена. Начнём заново 🙂');
+  }
+
+  @Hears(BTN.summary)
+  async onBtnSummary(@Ctx() ctx: Context): Promise<void> {
+    await this.showSummary(ctx);
+  }
+
+  @Hears(BTN.compact)
+  async onBtnCompact(@Ctx() ctx: Context): Promise<void> {
+    await this.runCompact(ctx);
   }
 
   @Command('reset')
@@ -136,6 +147,39 @@ export class TelegramUpdate implements OnApplicationBootstrap {
     if (!chat) return;
     await this.chat.reset(chat.id);
     await ctx.reply('История очищена. Начнём заново 🙂');
+  }
+
+  @Command('summary')
+  async onSummary(@Ctx() ctx: Context): Promise<void> {
+    await this.showSummary(ctx);
+  }
+
+  private async showSummary(ctx: Context): Promise<void> {
+    const chat = await this.resolveChat(ctx);
+    if (!chat) return;
+    const summary = await this.chat.getSummary(chat.id);
+    await ctx.reply(
+      summary
+        ? `📝 Текущая сводка беседы:\n\n${summary}`
+        : 'Сводки пока нет — история ещё не сжималась.',
+    );
+  }
+
+  @Command('compact')
+  async onCompact(@Ctx() ctx: Context): Promise<void> {
+    await this.runCompact(ctx);
+  }
+
+  private async runCompact(ctx: Context): Promise<void> {
+    const chat = await this.resolveChat(ctx);
+    if (!chat) return;
+    await ctx.sendChatAction('typing').catch(() => undefined);
+    const compacted = await this.chat.forceCompact(chat);
+    await ctx.reply(
+      compacted > 0
+        ? `🗜 Сжал ${compacted} сообщений в сводку. Посмотреть: /summary`
+        : 'Сжимать пока нечего — история слишком короткая.',
+    );
   }
 
   @Command('persona')
@@ -221,6 +265,7 @@ export class TelegramUpdate implements OnApplicationBootstrap {
     if (!message || !('text' in message)) return;
     const text = message.text;
     if (text.startsWith('/')) return; // commands handled elsewhere
+    if (BUTTON_LABELS.has(text.trim())) return; // reply-keyboard buttons handled by @Hears
 
     const chat = await this.resolveChat(ctx);
     if (!chat) return;

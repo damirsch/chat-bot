@@ -159,22 +159,46 @@ export class ChatService {
     return { system, messages };
   }
 
+  /** Return the current rolling summary text for a chat, if any. */
+  async getSummary(chatId: string): Promise<string | null> {
+    const summary = await this.prisma.summary.findUnique({
+      where: { chatId },
+    });
+    return summary?.content ?? null;
+  }
+
   /**
-   * If the verbatim history has grown beyond the window, compact the oldest
-   * messages into (or onto) the rolling summary and delete them.
+   * Auto-compaction: if the verbatim history has grown beyond the window,
+   * fold the oldest messages into the rolling summary and delete them.
    */
   async maybeSummarize(chat: Chat): Promise<void> {
+    await this.compact(chat, this.historyWindow);
+  }
+
+  /**
+   * Force compaction now, keeping only a small verbatim tail. Returns the
+   * number of messages that were folded into the summary (0 if nothing to do).
+   */
+  async forceCompact(chat: Chat): Promise<number> {
+    return this.compact(chat, 4);
+  }
+
+  /**
+   * Summarize every message beyond the newest `keepCount` into the rolling
+   * summary and delete them. Returns how many messages were compacted.
+   */
+  private async compact(chat: Chat, keepCount: number): Promise<number> {
     const total = await this.prisma.message.count({
       where: { chatId: chat.id },
     });
-    if (total <= this.historyWindow) return;
+    if (total <= keepCount) return 0;
 
     const overflow = await this.prisma.message.findMany({
       where: { chatId: chat.id },
       orderBy: { createdAt: 'asc' },
-      take: total - this.historyWindow,
+      take: total - keepCount,
     });
-    if (overflow.length === 0) return;
+    if (overflow.length === 0) return 0;
 
     const existing = await this.prisma.summary.findUnique({
       where: { chatId: chat.id },
@@ -216,8 +240,11 @@ export class ChatService {
       await this.prisma.message.deleteMany({
         where: { id: { in: overflow.map((m) => m.id) } },
       });
+
+      return overflow.length;
     } catch (err) {
       this.logger.error('Failed to summarize history', err as Error);
+      return 0;
     }
   }
 }
