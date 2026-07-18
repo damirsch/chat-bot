@@ -1,6 +1,15 @@
-import { Logger } from '@nestjs/common';
-import { Update, Start, Help, Command, On, Ctx, Action } from 'nestjs-telegraf';
-import { Context } from 'telegraf';
+import { Logger, OnApplicationBootstrap } from '@nestjs/common';
+import {
+  Update,
+  Start,
+  Help,
+  Command,
+  On,
+  Ctx,
+  Action,
+  InjectBot,
+} from 'nestjs-telegraf';
+import { Context, Telegraf } from 'telegraf';
 import { ChatKind, MessageRole } from '@prisma/client';
 import { ChatService } from '../chat/chat.service';
 import {
@@ -9,19 +18,40 @@ import {
   ReasoningLevel,
   REASONING_LEVELS,
 } from '../config/models.config';
-import { modelKeyboard, reasoningKeyboard, REASONING_LABELS } from './keyboards';
+import {
+  mainMenuKeyboard,
+  modelKeyboard,
+  reasoningKeyboard,
+  REASONING_LABELS,
+} from './keyboards';
 import { ResponderService } from './responder.service';
 import { GroupGateService } from './group-gate.service';
 
 @Update()
-export class TelegramUpdate {
+export class TelegramUpdate implements OnApplicationBootstrap {
   private readonly logger = new Logger(TelegramUpdate.name);
 
   constructor(
+    @InjectBot() private readonly bot: Telegraf<Context>,
     private readonly chat: ChatService,
     private readonly responder: ResponderService,
     private readonly groupGate: GroupGateService,
   ) {}
+
+  /** Register the command list so Telegram shows a nice "/" menu. */
+  async onApplicationBootstrap(): Promise<void> {
+    try {
+      await this.bot.telegram.setMyCommands([
+        { command: 'start', description: 'Запустить бота / меню' },
+        { command: 'model', description: 'Выбрать модель и reasoning' },
+        { command: 'persona', description: 'Характер бота в этом чате' },
+        { command: 'reset', description: 'Очистить историю диалога' },
+        { command: 'help', description: 'Помощь' },
+      ]);
+    } catch (err) {
+      this.logger.warn(`setMyCommands failed: ${String(err)}`);
+    }
+  }
 
   @Start()
   async onStart(@Ctx() ctx: Context): Promise<void> {
@@ -31,12 +61,9 @@ export class TelegramUpdate {
         '',
         'В личке отвечаю на каждое сообщение. В группах — когда меня зовут через @ или отвечают на моё сообщение, а иногда сам вступаю в разговор, если это уместно.',
         '',
-        'Команды:',
-        '/model — выбрать модель и уровень reasoning',
-        '/persona — задать характер/поведение бота в этом чате',
-        '/reset — очистить историю диалога',
-        '/help — помощь',
+        'Выбери действие ниже или просто напиши мне 👇',
       ].join('\n'),
+      mainMenuKeyboard(),
     );
   }
 
@@ -57,6 +84,10 @@ export class TelegramUpdate {
 
   @Command('model')
   async onModel(@Ctx() ctx: Context): Promise<void> {
+    await this.showModelPicker(ctx);
+  }
+
+  private async showModelPicker(ctx: Context): Promise<void> {
     const chat = await this.resolveChat(ctx);
     if (!chat) return;
     const def = getModel(chat.model);
@@ -64,6 +95,39 @@ export class TelegramUpdate {
       `Текущая модель: *${def?.label ?? chat.model}*\nВыбери модель:`,
       { parse_mode: 'Markdown', ...modelKeyboard(chat.model) },
     );
+  }
+
+  @Action('menu:model')
+  async onMenuModel(@Ctx() ctx: Context): Promise<void> {
+    await ctx.answerCbQuery();
+    await this.showModelPicker(ctx);
+  }
+
+  @Action('menu:help')
+  async onMenuHelp(@Ctx() ctx: Context): Promise<void> {
+    await ctx.answerCbQuery();
+    await this.onHelp(ctx);
+  }
+
+  @Action('menu:persona')
+  async onMenuPersona(@Ctx() ctx: Context): Promise<void> {
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      'Чтобы задать характер бота в этом чате, отправь:\n`/persona <текст>`\n\nВернуть дефолт: `/persona reset`',
+      { parse_mode: 'Markdown' },
+    );
+  }
+
+  @Action('menu:reset')
+  async onMenuReset(@Ctx() ctx: Context): Promise<void> {
+    const chat = await this.resolveChat(ctx);
+    if (!chat) {
+      await ctx.answerCbQuery();
+      return;
+    }
+    await this.chat.reset(chat.id);
+    await ctx.answerCbQuery('История очищена');
+    await ctx.reply('История очищена. Начнём заново 🙂');
   }
 
   @Command('reset')

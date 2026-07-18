@@ -6,6 +6,7 @@ import { AnthropicService, ChatMessage } from '../anthropic/anthropic.service';
 import {
   DEFAULT_MODEL_ID,
   ReasoningLevel,
+  getModel,
   isValidModel,
 } from '../config/models.config';
 import { DEFAULT_SYSTEM_PROMPT } from '../config/persona.config';
@@ -130,6 +131,19 @@ export class ChatService {
     });
 
     let system = chat.systemPrompt?.trim() || this.baseSystemPrompt();
+
+    const modelDef = getModel(chat.model);
+    const reasoningNote =
+      modelDef?.supportsReasoning && chat.reasoning !== 'off'
+        ? `, extended reasoning: ${chat.reasoning}`
+        : '';
+    system +=
+      `\n\n# Your current model\n` +
+      `You are running on ${modelDef?.label ?? chat.model} ` +
+      `(Anthropic API id: ${chat.model}${reasoningNote}). ` +
+      `If asked which model you are, answer with this exact model and version. ` +
+      `The user can switch your model at any time with the /model command.`;
+
     if (summary?.content) {
       system += `\n\nКонтекст предыдущей беседы (сводка):\n${summary.content}`;
     }
